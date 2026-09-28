@@ -1,0 +1,1536 @@
+{
+  "name": "Ecosphere IG-FB Social Media Automation - Public Template",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "https://stationery.ecosphere.co.in",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        800,
+        128
+      ],
+      "id": "c1997a44-db6d-4605-ba05-f30e243ee2af",
+      "name": "Get Ecosphere Products"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\n// Get the HTML returned by the HTTP Request node\nconst html = String(\n  input.data ||\n  input.body ||\n  input.response ||\n  ''\n);\n\nif (!html) {\n  throw new Error('Website HTML not found');\n}\n\n// Find all /products/... links\nconst matches = [\n  ...html.matchAll(/href=[\"']([^\"']*\\/products\\/[^\"'?#]+)[\"']/gi)\n];\n\nconst seen = new Set();\nconst products = [];\n\nfor (const match of matches) {\n  let url = match[1];\n\n  // Convert relative URL to full URL\n  if (url.startsWith('/')) {\n    url = 'https://stationery.ecosphere.co.in' + url;\n  }\n\n  // Remove duplicates\n  if (!seen.has(url)) {\n    seen.add(url);\n\n    products.push({\n      product_url: url\n    });\n  }\n}\n\nif (!products.length) {\n  throw new Error('No product links found');\n}\n\nreturn products.map(product => ({\n  json: product\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        128
+      ],
+      "id": "fd414d85-6a01-41e0-90b6-4cd8f3897f0b",
+      "name": "Extract Product Links"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nif (!items.length) {\n  throw new Error('No products available');\n}\n\n// Today's date in India\nconst today = new Intl.DateTimeFormat('en-CA', {\n  timeZone: 'Asia/Kolkata',\n  year: 'numeric',\n  month: '2-digit',\n  day: '2-digit'\n}).format(new Date());\n\n// Fixed rotation starting date\nconst startDate = '2026-01-01';\n\n// Convert both dates to UTC day numbers\nconst todayDay = Math.floor(\n  Date.parse(`${today}T00:00:00Z`) / 86400000\n);\n\nconst startDay = Math.floor(\n  Date.parse(`${startDate}T00:00:00Z`) / 86400000\n);\n\nconst dayNumber = todayDay - startDay;\n\n// Select exactly one product\nconst index =\n  ((dayNumber % items.length) + items.length) %\n  items.length;\n\nconst selected = items[index];\n\nreturn [\n  {\n    json: {\n      ...selected.json,\n\n      product_url: selected.json.product_url,\n      product_index: index,\n      product_number: index + 1,\n      total_products: items.length,\n      selected_date: today\n    },\n\n    binary: selected.binary\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        128
+      ],
+      "id": "5c943871-4fe4-450e-a2f8-fb8a12458719",
+      "name": "Select Today's Product"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.product_url}}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1424,
+        128
+      ],
+      "id": "d42998bd-ea11-4221-83ff-6fb093531743",
+      "name": "Get Today's Product Page"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\nconst html = String(\n  input.data ||\n  input.body ||\n  input.response ||\n  ''\n);\n\nif (!html) {\n  throw new Error('Product page HTML not found');\n}\n\n// -----------------------------\n// Helper functions\n// -----------------------------\n\nfunction clean(text = '') {\n  return String(text)\n    .replace(/<[^>]*>/g, ' ')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\")\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction getMeta(property) {\n  const regex1 = new RegExp(\n    `<meta[^>]+(?:property|name)=[\"']${property}[\"'][^>]+content=[\"']([^\"']+)[\"'][^>]*>`,\n    'i'\n  );\n\n  const regex2 = new RegExp(\n    `<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+(?:property|name)=[\"']${property}[\"'][^>]*>`,\n    'i'\n  );\n\n  const match =\n    html.match(regex1) ||\n    html.match(regex2);\n\n  return match ? clean(match[1]) : '';\n}\n\n// -----------------------------\n// PRODUCT NAME\n// -----------------------------\n\nlet productName = getMeta('og:title');\n\nif (!productName) {\n  const titleMatch =\n    html.match(/<title[^>]*>([\\s\\S]*?)<\\/title>/i);\n\n  productName =\n    titleMatch ? clean(titleMatch[1]) : '';\n}\n\n// -----------------------------\n// DESCRIPTION\n// -----------------------------\n\nlet description =\n  getMeta('og:description') ||\n  getMeta('description');\n\n// -----------------------------\n// REAL PRODUCT IMAGE\n// -----------------------------\n\nlet productImage =\n  getMeta('og:image');\n\nif (productImage.startsWith('//')) {\n  productImage = 'https:' + productImage;\n}\n\n// -----------------------------\n// PRODUCT URL\n// -----------------------------\n\nconst previous =\n  $(\"Select Today's Product\").first().json;\n\nconst productUrl =\n  previous.product_url || '';\n\n// -----------------------------\n// VALIDATION\n// -----------------------------\n\nif (!productName) {\n  throw new Error('Product name not found');\n}\n\nif (!productImage) {\n  throw new Error('Product image not found');\n}\n\nif (!productUrl) {\n  throw new Error('Product URL not found');\n}\n\n// -----------------------------\n// OUTPUT\n// -----------------------------\n\nreturn [\n  {\n    json: {\n      product_name: productName,\n      description: description,\n      product_image: productImage,\n      product_url: productUrl\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1632,
+        128
+      ],
+      "id": "8ee49e34-e123-434e-98be-6b798b5b6674",
+      "name": "Extract Product Data"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ollama = $input.first().json;\n\n// Get REAL product data\nconst product =\n  $(\"Extract Product Data\").first().json;\n\n\n// =====================================================\n// GET OLLAMA RESPONSE\n// =====================================================\n\nlet raw =\n  ollama.response ??\n  ollama.output ??\n  ollama.text ??\n  ollama.data ??\n  ollama.message?.content ??\n  ollama.content ??\n  '';\n\nif (typeof raw !== 'string') {\n  raw = JSON.stringify(raw);\n}\n\nraw = raw\n  .trim()\n  .replace(/^```json\\s*/i, '')\n  .replace(/^```\\s*/i, '')\n  .replace(/\\s*```$/i, '');\n\n\n// =====================================================\n// PARSE JSON\n// =====================================================\n\nlet parsed = {};\n\ntry {\n\n  parsed = JSON.parse(raw);\n\n} catch (error) {\n\n  throw new Error(\n    'Could not parse Ollama JSON: ' +\n    error.message +\n    '\\n\\nRaw response:\\n' +\n    raw\n  );\n}\n\n\n// =====================================================\n// HASHTAGS\n// =====================================================\n\nlet hashtags = [];\n\nif (Array.isArray(parsed.hashtags)) {\n\n  hashtags = parsed.hashtags\n    .map(v => String(v || '').trim())\n    .filter(Boolean)\n    .slice(0, 10);\n\n} else if (typeof parsed.hashtags === 'string') {\n\n  hashtags = parsed.hashtags\n    .split(/\\s+/)\n    .map(v => v.trim())\n    .filter(Boolean)\n    .slice(0, 10);\n\n}\n\nconst hashtagsText = hashtags.join(' ');\n\n\n// =====================================================\n// INSTAGRAM DATA\n// =====================================================\n\nconst instagram =\n  parsed.instagram &&\n  typeof parsed.instagram === 'object'\n    ? parsed.instagram\n    : {};\n\nconst slide1 = instagram.slide_1 || {};\nconst slide2 = instagram.slide_2 || {};\nconst slide3 = instagram.slide_3 || {};\nconst slide4 = instagram.slide_4 || {};\n\n\n// =====================================================\n// FACEBOOK DATA\n// =====================================================\n\nconst facebook =\n  parsed.facebook &&\n  typeof parsed.facebook === 'object'\n    ? parsed.facebook\n    : {};\n\n\n// =====================================================\n// DESIGN\n// =====================================================\n\nconst design =\n  parsed.design &&\n  typeof parsed.design === 'object'\n    ? parsed.design\n    : {};\n\n\n// =====================================================\n// FINAL CAPTION\n// =====================================================\n\nconst finalCaption = [\n  parsed.caption || '',\n  hashtagsText,\n  product.product_url || ''\n]\n  .filter(Boolean)\n  .join('\\n\\n')\n  .trim();\n\n\n// =====================================================\n// OUTPUT\n// =====================================================\n\nreturn [\n  {\n    json: {\n\n      // ===============================================\n      // REAL WEBSITE PRODUCT\n      // ===============================================\n\n      product_name:\n        product.product_name || '',\n\n      product_image:\n        product.product_image || '',\n\n      product_url:\n        product.product_url || '',\n\n      description:\n        product.description || '',\n\n\n      // ===============================================\n      // GENERAL SOCIAL CONTENT\n      // ===============================================\n\n      hook:\n        parsed.hook || '',\n\n      caption:\n        parsed.caption || '',\n\n      cta:\n        parsed.cta || 'Explore Now',\n\n      hashtags,\n\n      hashtags_text:\n        hashtagsText,\n\n      final_caption:\n        finalCaption,\n\n\n      // ===============================================\n      // INSTAGRAM — SLIDE 1\n      // ===============================================\n\n      ig1_hook:\n        slide1.hook || '',\n\n      ig1_headline:\n        slide1.headline || '',\n\n      ig1_subheadline:\n        slide1.subheadline || '',\n\n      ig1_design_prompt:\n        slide1.design_prompt || '',\n\n\n      // ===============================================\n      // INSTAGRAM — SLIDE 2\n      // ===============================================\n\n      ig2_heading:\n        slide2.heading || '',\n\n      ig2_feature_1:\n        slide2.feature_1 || '',\n\n      ig2_feature_2:\n        slide2.feature_2 || '',\n\n      ig2_feature_3:\n        slide2.feature_3 || '',\n\n      ig2_design_prompt:\n        slide2.design_prompt || '',\n\n\n      // ===============================================\n      // INSTAGRAM — SLIDE 3\n      // ===============================================\n\n      ig3_heading:\n        slide3.heading || '',\n\n      ig3_benefit_1:\n        slide3.benefit_1 || '',\n\n      ig3_benefit_2:\n        slide3.benefit_2 || '',\n\n      ig3_benefit_3:\n        slide3.benefit_3 || '',\n\n      ig3_design_prompt:\n        slide3.design_prompt || '',\n\n\n      // ===============================================\n      // INSTAGRAM — SLIDE 4\n      // ===============================================\n\n      ig4_headline:\n        slide4.headline || '',\n\n      ig4_supporting_text:\n        slide4.supporting_text || '',\n\n      ig4_cta:\n        slide4.cta || 'Explore Now',\n\n      ig4_website:\n        slide4.website ||\n        'stationery.ecosphere.co.in',\n\n      ig4_design_prompt:\n        slide4.design_prompt || '',\n\n\n      // ===============================================\n      // FACEBOOK SINGLE POST\n      // ===============================================\n\n      fb_hook:\n        facebook.hook || '',\n\n      fb_headline:\n        facebook.headline || '',\n\n      fb_subheadline:\n        facebook.subheadline || '',\n\n      fb_feature_1:\n        facebook.feature_1 || '',\n\n      fb_feature_2:\n        facebook.feature_2 || '',\n\n      fb_feature_3:\n        facebook.feature_3 || '',\n\n      fb_cta:\n        facebook.cta || 'Explore Now',\n\n      fb_design_prompt:\n        facebook.design_prompt || '',\n\n\n      // ===============================================\n      // DESIGN DIRECTION\n      // ===============================================\n\n      design_style:\n        design.style ||\n        'premium editorial',\n\n      visual_mood:\n        design.visual_mood ||\n        'premium natural',\n\n      product_position:\n        design.product_position ||\n        'right',\n\n      text_position:\n        design.text_position ||\n        'left'\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2048,
+        128
+      ],
+      "id": "b0b3f6e6-b25f-4e21-b657-71bd5e9fcae3",
+      "name": "Parse Social Content"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://YOUR_OLLAMA_HOST:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  model: \"qwen3.5:9b\",\n  stream: false,\n  format: \"json\",\n  think: false,\n\n  prompt: `\nYou are the social media content strategist for Ecosphere sustainable stationery.\n\nCreate content for ONE daily product campaign based only on the REAL product information below.\n\nPRODUCT NAME:\n${$json.product_name}\n\nPRODUCT DESCRIPTION:\n${$json.description}\n\nPRODUCT URL:\n${$json.product_url}\n\nIMPORTANT RULES:\n- Use only facts supported by the product information.\n- Do not invent certifications.\n- Do not invent specifications.\n- Do not invent environmental claims.\n- Keep the language simple, premium and professional.\n- The product image from the website will be used as the real product reference.\n- Do not ask the AI image model to recreate a different product.\n- The Instagram output must be a 4-slide carousel.\n- The Facebook output must be a separate single-image post.\n- Return ONLY valid JSON.\n- Do not use markdown.\n\nINSTAGRAM CAROUSEL STRUCTURE:\n\nSLIDE 1 — COVER\n- strong hook\n- short headline\n- short subheadline\n- visually attention-grabbing\n\nSLIDE 2 — PRODUCT FEATURES\n- short heading\n- exactly 3 factual features\n- concise text suitable for poster layout\n\nSLIDE 3 — WHY IT MATTERS\n- short heading\n- 2 to 3 practical benefits / usage reasons\n- if sustainability is not explicitly supported in the product data, do not invent it\n\nSLIDE 4 — CTA\n- closing headline\n- one short supporting line\n- CTA\n- website reference\n\nFACEBOOK SINGLE POST:\n- one strong hook\n- one headline\n- one subheadline\n- exactly 3 short features/benefits\n- CTA\n- suitable for one single poster\n\nCAPTION:\n- 70 to 120 words\n- suitable for both Instagram and Facebook\n- professional and easy to read\n- do not repeat all poster text word-for-word\n- end naturally with a CTA\n\nHASHTAGS:\n- 6 to 10 relevant hashtags\n- include #Ecosphere\n- avoid irrelevant or spammy tags\n\nDESIGN:\n- premium editorial\n- eco-conscious brand aesthetic\n- modern commercial social media creative\n- real product must remain the hero\n- clean visual hierarchy\n- readable negative space\n- visually different composition each day\n\nReturn EXACTLY this JSON structure:\n\n{\n  \"product_name\": \"\",\n  \"hook\": \"\",\n  \"caption\": \"\",\n  \"cta\": \"Explore Now\",\n  \"hashtags\": [\n    \"#Ecosphere\"\n  ],\n\n  \"instagram\": {\n    \"slide_1\": {\n      \"hook\": \"\",\n      \"headline\": \"\",\n      \"subheadline\": \"\",\n      \"design_prompt\": \"\"\n    },\n\n    \"slide_2\": {\n      \"heading\": \"\",\n      \"feature_1\": \"\",\n      \"feature_2\": \"\",\n      \"feature_3\": \"\",\n      \"design_prompt\": \"\"\n    },\n\n    \"slide_3\": {\n      \"heading\": \"\",\n      \"benefit_1\": \"\",\n      \"benefit_2\": \"\",\n      \"benefit_3\": \"\",\n      \"design_prompt\": \"\"\n    },\n\n    \"slide_4\": {\n      \"headline\": \"\",\n      \"supporting_text\": \"\",\n      \"cta\": \"Explore Now\",\n      \"website\": \"stationery.ecosphere.co.in\",\n      \"design_prompt\": \"\"\n    }\n  },\n\n  \"facebook\": {\n    \"hook\": \"\",\n    \"headline\": \"\",\n    \"subheadline\": \"\",\n    \"feature_1\": \"\",\n    \"feature_2\": \"\",\n    \"feature_3\": \"\",\n    \"cta\": \"Explore Now\",\n    \"design_prompt\": \"\"\n  },\n\n  \"design\": {\n    \"style\": \"premium editorial\",\n    \"visual_mood\": \"premium natural\",\n    \"product_position\": \"right\",\n    \"text_position\": \"left\"\n  }\n}\n`\n}\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1840,
+        128
+      ],
+      "id": "bb13153f-ca48-4771-b861-be4895845ec7",
+      "name": "Ollama Generate Social Content"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.product_image}}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "product"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2256,
+        128
+      ],
+      "id": "4e96107e-1568-4e46-94bf-a3b287deeb09",
+      "name": "Download Product Image"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\n\nconst json = item.json || {};\nconst binary = item.binary || {};\n\nif (!binary.product) {\n  throw new Error('Real product image not found in binary.product');\n}\n\nconst productName =\n  String(json.product_name || 'Ecosphere stationery product').trim();\n\nconst finalImagePrompt = `\nCreate a clean photorealistic commercial product photo for Ecosphere sustainable stationery.\n\nUse the uploaded reference image only to understand and preserve the real product.\n\nPRODUCT:\n${productName}\n\nSCENE:\n- premium modern desk setup\n- soft natural daylight\n- warm neutral tones\n- subtle indoor plants\n- elegant minimal workspace\n- realistic shadows\n- realistic materials\n- professional commercial product photography\n- clean editorial composition\n- sufficient negative space for text overlay later\n\nIMPORTANT:\n- keep the real product clearly recognizable\n- preserve its overall shape and packaging\n- keep the product as the hero subject\n- do not replace it with another product\n- do not add extra products\n- do not add people\n- do not add hands\n- do not add faces\n- do not add promotional text\n- do not add captions\n- do not generate logos\n- do not add watermarks\n- do not create unrelated objects\n\nThe final social-media text, CTA and official Ecosphere logo will be added later using HTML/CSS.\n\nSquare social-media composition.\n`.trim();\n\nreturn [\n  {\n    json: {\n      ...json,\n      final_image_prompt: finalImagePrompt\n    },\n    binary\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2464,
+        128
+      ],
+      "id": "deee45b8-aa03-4e51-8acd-d5a19030efb2",
+      "name": "Prepare Final AI Image Prompt"
+    },
+    {
+      "parameters": {
+        "operation": "resize",
+        "dataPropertyName": "product",
+        "width": 480,
+        "height": 480,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.editImage",
+      "typeVersion": 1,
+      "position": [
+        2672,
+        128
+      ],
+      "id": "783e58a1-caa4-4ee0-a046-7686a762e0fa",
+      "name": "Prepare Product Reference"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.cloudflare.com/client/v4/accounts/YOUR_CLOUDFLARE_ACCOUNT_ID/ai/run/@cf/black-forest-labs/flux-2-klein-4b",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_CLOUDFLARE_API_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "prompt",
+              "value": "={{$json.final_image_prompt}}"
+            },
+            {
+              "name": "width",
+              "value": "1080"
+            },
+            {
+              "name": "height",
+              "value": "1080"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "input_image_0",
+              "inputDataFieldName": "product"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2880,
+        128
+      ],
+      "id": "25704879-2c33-47e3-bce2-50684703c122",
+      "name": "Generate Final AI Product Post"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\n\nconst base64Image = item.json?.result?.image;\n\nif (!base64Image) {\n  throw new Error(\n    'Cloudflare generated image not found in result.image'\n  );\n}\n\n// Get all original content prepared earlier\nconst content =\n  $(\"Prepare Final AI Image Prompt\").first().json;\n\nconst buffer =\n  Buffer.from(base64Image, 'base64');\n\nconst fileName =\n  `ecosphere-ai-post-${new Date()\n    .toISOString()\n    .slice(0, 10)}.jpg`;\n\nreturn [\n  {\n    json: {\n      ...content,\n\n      generated_file_name: fileName,\n      ai_image_generated: true\n    },\n\n    binary: {\n      final_image: {\n        data: buffer.toString('base64'),\n        mimeType: 'image/jpeg',\n        fileName: fileName,\n        fileExtension: 'jpg'\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3088,
+        128
+      ],
+      "id": "1d003b52-5cd5-4741-afd1-979d220648ad",
+      "name": "Convert AI Image to File"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\n\nconst json = item.json || {};\nconst binary = item.binary || {};\n\nif (!binary.final_image?.data) {\n  throw new Error('final_image binary not found');\n}\n\nif (!json.product_image) {\n  throw new Error('product_image URL not found');\n}\n\nconst logoUrl =\n  'https://stationery.ecosphere.co.in/cdn/shop/files/Beige_and_White_Aesthetic_Minimalist_Modern_Typography_Beauty_Brand_Logo_2.png?v=1732813606&width=600';\n\nconst bg =\n  `data:image/jpeg;base64,${binary.final_image.data}`;\n\nconst productImage = json.product_image;\n\nfunction safe(value = '') {\n  return String(value)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&#039;');\n}\n\nfunction baseCSS() {\n  return `\n    * {\n      box-sizing: border-box;\n    }\n\n    html,\n    body {\n      margin: 0;\n      width: 1080px;\n      height: 1080px;\n      overflow: hidden;\n      font-family: Arial, Helvetica, sans-serif;\n      background: #f2efe6;\n    }\n\n    .poster {\n      width: 1080px;\n      height: 1080px;\n      position: relative;\n      overflow: hidden;\n      background:\n        linear-gradient(\n          90deg,\n          rgba(18, 29, 20, .93) 0%,\n          rgba(18, 29, 20, .82) 42%,\n          rgba(18, 29, 20, .25) 67%,\n          rgba(18, 29, 20, .06) 100%\n        ),\n        url('${bg}');\n      background-size: cover;\n      background-position: center;\n      color: #ffffff;\n    }\n\n    /* ---------------------------------------\n       RIGHT PRODUCT DISPLAY AREA\n       This hides most AI product distortion\n       and places the REAL website product above it.\n    --------------------------------------- */\n\n    .product-panel {\n      position: absolute;\n      right: 0;\n      top: 0;\n      width: 47%;\n      height: 100%;\n      background:\n        linear-gradient(\n          270deg,\n          rgba(242,239,230,.94) 0%,\n          rgba(242,239,230,.88) 55%,\n          rgba(242,239,230,.25) 100%\n        );\n    }\n\n    .product-stage {\n      position: absolute;\n      right: 45px;\n      top: 175px;\n      width: 470px;\n      height: 690px;\n      display: flex;\n      align-items: center;\n      justify-content: center;\n    }\n\n    .product-image {\n      display: block;\n      width: 100%;\n      height: 100%;\n      max-width: 440px;\n      max-height: 650px;\n      object-fit: contain;\n      object-position: center;\n      filter:\n        drop-shadow(0px 26px 35px rgba(0,0,0,.24))\n        drop-shadow(0px 6px 10px rgba(0,0,0,.12));\n    }\n\n    .product-glow {\n      position: absolute;\n      width: 390px;\n      height: 390px;\n      border-radius: 50%;\n      background: rgba(255,255,255,.45);\n      filter: blur(55px);\n      z-index: 0;\n    }\n\n    .product-image {\n      position: relative;\n      z-index: 2;\n    }\n\n    /* ---------------------------------------\n       BRAND\n    --------------------------------------- */\n\n    .logo {\n      position: absolute;\n      top: 52px;\n      left: 62px;\n      width: 180px;\n      max-height: 90px;\n      object-fit: contain;\n      background: white;\n      padding: 10px 15px;\n      border-radius: 14px;\n      z-index: 20;\n    }\n\n    .content {\n      position: absolute;\n      left: 65px;\n      top: 210px;\n      width: 500px;\n      z-index: 10;\n    }\n\n    .tag {\n      display: inline-block;\n      padding: 10px 18px;\n      border-radius: 30px;\n      background: rgba(255,255,255,.16);\n      border: 1px solid rgba(255,255,255,.18);\n      font-size: 21px;\n      margin-bottom: 24px;\n      backdrop-filter: blur(8px);\n    }\n\n    h1 {\n      margin: 0 0 20px;\n      font-size: 66px;\n      line-height: 1.02;\n      font-weight: 800;\n      letter-spacing: -1.5px;\n    }\n\n    h2 {\n      margin: 0 0 24px;\n      font-size: 48px;\n      line-height: 1.08;\n      font-weight: 800;\n    }\n\n    p {\n      font-size: 27px;\n      line-height: 1.4;\n      margin: 0 0 18px;\n      max-width: 480px;\n    }\n\n    .feature {\n      display: flex;\n      align-items: flex-start;\n      gap: 14px;\n      margin: 18px 0;\n      font-size: 27px;\n      line-height: 1.25;\n      max-width: 485px;\n    }\n\n    .check {\n      width: 34px;\n      height: 34px;\n      min-width: 34px;\n      border-radius: 50%;\n      background: white;\n      color: #29442c;\n      display: flex;\n      align-items: center;\n      justify-content: center;\n      font-weight: 800;\n    }\n\n    .website {\n      position: absolute;\n      bottom: 48px;\n      left: 65px;\n      font-size: 23px;\n      font-weight: 700;\n      z-index: 15;\n    }\n\n    .slide-number {\n      position: absolute;\n      top: 60px;\n      right: 60px;\n      background: rgba(255,255,255,.94);\n      color: #263726;\n      padding: 12px 20px;\n      border-radius: 30px;\n      font-size: 20px;\n      font-weight: 700;\n      z-index: 30;\n    }\n\n    .product-name {\n      position: absolute;\n      right: 55px;\n      bottom: 65px;\n      width: 425px;\n      text-align: center;\n      color: #263726;\n      font-size: 22px;\n      font-weight: 700;\n      line-height: 1.25;\n      z-index: 20;\n    }\n\n    .closing-content {\n      position: absolute;\n      left: 65px;\n      top: 270px;\n      width: 500px;\n      z-index: 10;\n    }\n\n    .closing-website {\n      display: inline-block;\n      margin-top: 30px;\n      font-size: 25px;\n      font-weight: 800;\n      padding-bottom: 7px;\n      border-bottom: 2px solid rgba(255,255,255,.7);\n    }\n  `;\n}\n\nfunction productBlock() {\n  return `\n    <div class=\"product-panel\"></div>\n\n    <div class=\"product-stage\">\n      <div class=\"product-glow\"></div>\n\n      <img\n        class=\"product-image\"\n        src=\"${safe(productImage)}\"\n        alt=\"${safe(json.product_name || 'Ecosphere Product')}\"\n      >\n    </div>\n\n    <div class=\"product-name\">\n      ${safe(json.product_name || '')}\n    </div>\n  `;\n}\n\nfunction wrap(content) {\n  return `\n  <!DOCTYPE html>\n  <html>\n    <head>\n      <meta charset=\"UTF-8\">\n\n      <style>\n        ${baseCSS()}\n      </style>\n    </head>\n\n    <body>\n      ${content}\n    </body>\n  </html>\n  `;\n}\n\n\n// ===================================================\n// INSTAGRAM SLIDE 1 — COVER\n// ===================================================\n\nconst slide1 = wrap(`\n  <div class=\"poster\">\n\n    <img\n      class=\"logo\"\n      src=\"${logoUrl}\"\n      alt=\"Ecosphere Stationery\"\n    >\n\n    <div class=\"slide-number\">\n      01 / 04\n    </div>\n\n    ${productBlock()}\n\n    <div class=\"content\">\n\n      <div class=\"tag\">\n        ${safe(json.ig1_hook)}\n      </div>\n\n      <h1>\n        ${safe(json.ig1_headline)}\n      </h1>\n\n      <p>\n        ${safe(json.ig1_subheadline)}\n      </p>\n\n    </div>\n\n    <div class=\"website\">\n      stationery.ecosphere.co.in\n    </div>\n\n  </div>\n`);\n\n\n// ===================================================\n// INSTAGRAM SLIDE 2 — FEATURES\n// ===================================================\n\nconst slide2 = wrap(`\n  <div class=\"poster\">\n\n    <img\n      class=\"logo\"\n      src=\"${logoUrl}\"\n      alt=\"Ecosphere Stationery\"\n    >\n\n    <div class=\"slide-number\">\n      02 / 04\n    </div>\n\n    ${productBlock()}\n\n    <div class=\"content\">\n\n      <div class=\"tag\">\n        PRODUCT FEATURES\n      </div>\n\n      <h2>\n        ${safe(json.ig2_heading)}\n      </h2>\n\n      <div class=\"feature\">\n        <div class=\"check\">✓</div>\n        <div>\n          ${safe(json.ig2_feature_1)}\n        </div>\n      </div>\n\n      <div class=\"feature\">\n        <div class=\"check\">✓</div>\n        <div>\n          ${safe(json.ig2_feature_2)}\n        </div>\n      </div>\n\n      <div class=\"feature\">\n        <div class=\"check\">✓</div>\n        <div>\n          ${safe(json.ig2_feature_3)}\n        </div>\n      </div>\n\n    </div>\n\n    <div class=\"website\">\n      stationery.ecosphere.co.in\n    </div>\n\n  </div>\n`);\n\n\n// ===================================================\n// INSTAGRAM SLIDE 3 — BENEFITS\n// ===================================================\n\nconst slide3 = wrap(`\n  <div class=\"poster\">\n\n    <img\n      class=\"logo\"\n      src=\"${logoUrl}\"\n      alt=\"Ecosphere Stationery\"\n    >\n\n    <div class=\"slide-number\">\n      03 / 04\n    </div>\n\n    ${productBlock()}\n\n    <div class=\"content\">\n\n      <div class=\"tag\">\n        WHY IT MATTERS\n      </div>\n\n      <h2>\n        ${safe(json.ig3_heading)}\n      </h2>\n\n      <div class=\"feature\">\n        <div class=\"check\">✓</div>\n        <div>\n          ${safe(json.ig3_benefit_1)}\n        </div>\n      </div>\n\n      <div class=\"feature\">\n        <div class=\"check\">✓</div>\n        <div>\n          ${safe(json.ig3_benefit_2)}\n        </div>\n      </div>\n\n      <div class=\"feature\">\n        <div class=\"check\">✓</div>\n        <div>\n          ${safe(json.ig3_benefit_3)}\n        </div>\n      </div>\n\n    </div>\n\n    <div class=\"website\">\n      stationery.ecosphere.co.in\n    </div>\n\n  </div>\n`);\n\n\n// ===================================================\n// INSTAGRAM SLIDE 4 — CLOSING\n// NO EXPLORE NOW / NO BUTTON\n// ===================================================\n\nconst slide4 = wrap(`\n  <div class=\"poster\">\n\n    <img\n      class=\"logo\"\n      src=\"${logoUrl}\"\n      alt=\"Ecosphere Stationery\"\n    >\n\n    <div class=\"slide-number\">\n      04 / 04\n    </div>\n\n    ${productBlock()}\n\n    <div class=\"closing-content\">\n\n      <div class=\"tag\">\n        ECOSPHERE\n      </div>\n\n      <h1>\n        ${safe(json.ig4_headline)}\n      </h1>\n\n      <p>\n        ${safe(json.ig4_supporting_text)}\n      </p>\n\n      <div class=\"closing-website\">\n        ${safe(\n          json.ig4_website ||\n          'stationery.ecosphere.co.in'\n        )}\n      </div>\n\n    </div>\n\n  </div>\n`);\n\n\n// ===================================================\n// FACEBOOK SINGLE POST\n// NO CTA BUTTON\n// ===================================================\n\nconst facebook = wrap(`\n  <div class=\"poster\">\n\n    <img\n      class=\"logo\"\n      src=\"${logoUrl}\"\n      alt=\"Ecosphere Stationery\"\n    >\n\n    ${productBlock()}\n\n    <div class=\"content\">\n\n      <div class=\"tag\">\n        ${safe(json.fb_hook)}\n      </div>\n\n      <h1>\n        ${safe(json.fb_headline)}\n      </h1>\n\n      <p>\n        ${safe(json.fb_subheadline)}\n      </p>\n\n      <div class=\"feature\">\n        <div class=\"check\">✓</div>\n        <div>\n          ${safe(json.fb_feature_1)}\n        </div>\n      </div>\n\n      <div class=\"feature\">\n        <div class=\"check\">✓</div>\n        <div>\n          ${safe(json.fb_feature_2)}\n        </div>\n      </div>\n\n      <div class=\"feature\">\n        <div class=\"check\">✓</div>\n        <div>\n          ${safe(json.fb_feature_3)}\n        </div>\n      </div>\n\n    </div>\n\n    <div class=\"website\">\n      stationery.ecosphere.co.in\n    </div>\n\n  </div>\n`);\n\n\n// ===================================================\n// OUTPUT\n// ===================================================\n\nreturn [\n  {\n    json: {\n      ...json,\n\n      ig_slide_1_html: slide1,\n      ig_slide_2_html: slide2,\n      ig_slide_3_html: slide3,\n      ig_slide_4_html: slide4,\n\n      fb_post_html: facebook\n    },\n\n    binary\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3296,
+        128
+      ],
+      "id": "c2ae99fe-c6d8-498d-bcd9-a6c96d846f00",
+      "name": "Prepare IG Carousel + FB HTML1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.cloudflare.com/client/v4/accounts/YOUR_CLOUDFLARE_ACCOUNT_ID/browser-rendering/screenshot",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_CLOUDFLARE_API_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  html: $json.ig_slide_1_html,\n  viewport: {\n    width: 1080,\n    height: 1080\n  },\n  screenshotOptions: {\n    type: \"jpeg\",\n    fullPage: false\n  }\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "ig_slide_1"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        608,
+        400
+      ],
+      "id": "c02d2fdc-6e79-4c18-81a1-704465d30e9a",
+      "name": "Render IG Slide 1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.cloudflare.com/client/v4/accounts/YOUR_CLOUDFLARE_ACCOUNT_ID/browser-rendering/screenshot",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_CLOUDFLARE_API_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  html: $json.ig_slide_2_html,\n  viewport: {\n    width: 1080,\n    height: 1080\n  },\n  screenshotOptions: {\n    type: \"jpeg\",\n    fullPage: false\n  }\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "=ig_slide_2"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1168,
+        400
+      ],
+      "id": "a86a9df3-a3c0-441c-b028-caff7538f948",
+      "name": "Render IG Slide 2"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.cloudflare.com/client/v4/accounts/YOUR_CLOUDFLARE_ACCOUNT_ID/browser-rendering/screenshot",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_CLOUDFLARE_API_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  html: $(\"Prepare IG Carousel + FB HTML1\").first().json.ig_slide_3_html,\n  viewport: {\n    width: 1080,\n    height: 1080\n  },\n  screenshotOptions: {\n    type: \"jpeg\",\n    fullPage: false\n  }\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "ig_slide_3"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1664,
+        400
+      ],
+      "id": "df078dd1-323a-4e92-8f63-337ecf252cd5",
+      "name": "Render IG Slide 3"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.cloudflare.com/client/v4/accounts/YOUR_CLOUDFLARE_ACCOUNT_ID/browser-rendering/screenshot",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_CLOUDFLARE_API_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  html: $(\"Prepare IG Carousel + FB HTML1\").first().json.ig_slide_4_html,\n  viewport: {\n    width: 1080,\n    height: 1080\n  },\n  screenshotOptions: {\n    type: \"jpeg\",\n    fullPage: false\n  }\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "ig_slide_4"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2176,
+        400
+      ],
+      "id": "03586b2f-7933-4763-9178-09f841a2cf8f",
+      "name": "Render IG Slide 4"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.cloudflare.com/client/v4/accounts/YOUR_CLOUDFLARE_ACCOUNT_ID/browser-rendering/screenshot",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_CLOUDFLARE_API_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  html: $(\"Prepare IG Carousel + FB HTML1\").first().json.fb_post_html,\n  viewport: {\n    width: 1080,\n    height: 1080\n  },\n  screenshotOptions: {\n    type: \"jpeg\",\n    fullPage: false\n  }\n}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2688,
+        400
+      ],
+      "id": "73eae905-5767-4a6d-9194-566708a31ab5",
+      "name": "Render FB Post"
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        992,
+        400
+      ],
+      "id": "fc388a74-1313-449b-b0a0-da461cdc5ea9",
+      "name": "Wait After Slide 1",
+      "webhookId": "REGENERATED_ON_IMPORT"
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1488,
+        400
+      ],
+      "id": "21d08afd-1900-4dff-9b44-b78ff2643536",
+      "name": "Wait After Slide 2",
+      "webhookId": "REGENERATED_ON_IMPORT"
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2016,
+        400
+      ],
+      "id": "cdac317d-5151-4b43-b99f-566555fe8bc1",
+      "name": "Wait After Slide 3",
+      "webhookId": "REGENERATED_ON_IMPORT"
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2528,
+        400
+      ],
+      "id": "b1588036-40e5-4ced-9f2b-6ca90cafccc2",
+      "name": "Wait After Slide 4",
+      "webhookId": "REGENERATED_ON_IMPORT"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=/home/node/.n8n-files/social-images/ig-slide-1.jpg",
+        "dataPropertyName": "ig_slide_1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        816,
+        400
+      ],
+      "id": "8821b8fe-3eba-4f6e-a135-bca421f477e6",
+      "name": "Save IG Slide 1"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=/home/node/.n8n-files/social-images/ig-slide-2.jpg",
+        "dataPropertyName": "ig_slide_2",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        1328,
+        400
+      ],
+      "id": "9f933219-d56f-410e-9327-11b4c8375a31",
+      "name": "Save IG Slide 2"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=/home/node/.n8n-files/social-images/ig-slide-3.jpg",
+        "dataPropertyName": "ig_slide_3",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        1840,
+        400
+      ],
+      "id": "e993525e-f033-4298-85a6-392592132732",
+      "name": "Save IG Slide 3"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "=/home/node/.n8n-files/social-images/ig-slide-4.jpg",
+        "dataPropertyName": "ig_slide_4",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        2352,
+        400
+      ],
+      "id": "3021fd10-fc04-4708-b1e3-3c1c486ae9de",
+      "name": "Save IG Slide 4"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ '/home/node/.n8n-files/social-images/fb-post-' + $execution.id + '.jpg' }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        2864,
+        400
+      ],
+      "id": "b62efbbb-7938-4de5-a55f-a23c75244d77",
+      "name": "Save FB Post1"
+    },
+    {
+      "parameters": {
+        "path": "=social-image",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        800,
+        688
+      ],
+      "id": "a3eb960c-408d-4ad4-b8a5-82817820a79d",
+      "name": "Webhook",
+      "webhookId": "REGENERATED_ON_IMPORT"
+    },
+    {
+      "parameters": {
+        "jsCode": "const filename = $json.query?.filename || '';\n\n// Allow Instagram slide images:\n// ig-slide-1.jpg\n// ig-slide-2.jpg\n// ig-slide-3.jpg\n// ig-slide-4.jpg\nconst igPattern = /^ig-slide-[1-4]\\.jpg$/;\n\n// Allow Facebook image:\n// fb-post-12345.jpg\nconst fbPattern = /^fb-post-\\d+\\.jpg$/;\n\n// Also allow fixed Facebook filename if we use it later:\n// fb-post.jpg\nconst fbFixedPattern = /^fb-post\\.jpg$/;\n\nconst isAllowed =\n  igPattern.test(filename) ||\n  fbPattern.test(filename) ||\n  fbFixedPattern.test(filename);\n\nif (!isAllowed) {\n  throw new Error(`Invalid image filename: ${filename}`);\n}\n\nconst filePath =\n  '/home/node/.n8n-files/social-images/' + filename;\n\nreturn [\n  {\n    json: {\n      filename,\n      filePath,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        992,
+        688
+      ],
+      "id": "43407101-6749-43cc-b6ce-fb7665ae080b",
+      "name": "Build Image Path"
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{$json.filePath}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        1168,
+        688
+      ],
+      "id": "7739c870-2866-4f91-abda-6d457d8517fd",
+      "name": "Read Social Image"
+    },
+    {
+      "parameters": {
+        "respondWith": "binary",
+        "responseDataSource": "set",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "image/jpeg"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1360,
+        688
+      ],
+      "id": "d3ede63d-4cc7-4004-bab8-fb665524be86",
+      "name": "Return Social Image"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v26.0/YOUR_INSTAGRAM_BUSINESS_ID/media",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "YOUR_META_ACCESS_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": " image_url",
+              "value": "={{ 'https://YOUR_N8N_DOMAIN/webhook/social-image?filename=ig-slide-1.jpg&v=' + $execution.id }}\n"
+            },
+            {
+              "name": "is_carousel_item",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3024,
+        400
+      ],
+      "id": "97734109-6f7d-4a9b-a8d4-ceeef706fbb6",
+      "name": "Create IG Child 1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v26.0/YOUR_INSTAGRAM_BUSINESS_ID/media",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "YOUR_META_ACCESS_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": " image_url",
+              "value": "={{ 'https://YOUR_N8N_DOMAIN/webhook/social-image?filename=ig-slide-2.jpg&v=' + $execution.id }}\n"
+            },
+            {
+              "name": "is_carousel_item",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3232,
+        400
+      ],
+      "id": "8c0466c4-669a-427a-af44-6d08480fd4a3",
+      "name": "Create IG Child 2"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v26.0/YOUR_INSTAGRAM_BUSINESS_ID/media",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": " access_token",
+              "value": "YOUR_META_ACCESS_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": " image_url",
+              "value": "={{ 'https://YOUR_N8N_DOMAIN/webhook/social-image?filename=ig-slide-3.jpg&v=' + $execution.id }}\n"
+            },
+            {
+              "name": "is_carousel_item",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3440,
+        400
+      ],
+      "id": "7b100a01-64b2-407f-8a51-6a660c1fed95",
+      "name": "Create IG Child 3"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v26.0/YOUR_INSTAGRAM_BUSINESS_ID/media",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": " access_token",
+              "value": "YOUR_META_ACCESS_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": " image_url",
+              "value": "={{ 'https://YOUR_N8N_DOMAIN/webhook/social-image?filename=ig-slide-4.jpg&v=' + $execution.id }}"
+            },
+            {
+              "name": "is_carousel_item",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3648,
+        400
+      ],
+      "id": "b748a2d0-d939-4fed-b81e-1d0e0da2b641",
+      "name": "Create IG Child 4"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v26.0/YOUR_INSTAGRAM_BUSINESS_ID/media",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": " access_token",
+              "value": "YOUR_META_ACCESS_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "media_type",
+              "value": "CAROUSEL"
+            },
+            {
+              "name": "children",
+              "value": "={{\n[\n  $(\"Create IG Child 1\").first().json.id,\n  $(\"Create IG Child 2\").first().json.id,\n  $(\"Create IG Child 3\").first().json.id,\n  $(\"Create IG Child 4\").first().json.id\n].join(\",\")\n}}"
+            },
+            {
+              "name": "caption",
+              "value": "={{ $(\"Parse Social Content\").first().json.final_caption }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3840,
+        400
+      ],
+      "id": "98e717e0-1e5c-488c-ae84-a5ae1d2c1401",
+      "name": "Create IG Carousel"
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        4048,
+        400
+      ],
+      "id": "46330fa1-65c0-4d9a-9f73-a4999376b15b",
+      "name": "Wait for IG Carousel",
+      "webhookId": "REGENERATED_ON_IMPORT"
+    },
+    {
+      "parameters": {
+        "url": "={{ \n  \"https://graph.facebook.com/v26.0/\" +\n  $(\"Create IG Carousel\").first().json.id +\n  \"?fields=status_code,status\"\n}}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": " access_token",
+              "value": "YOUR_META_ACCESS_TOKEN"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        4240,
+        400
+      ],
+      "id": "d2852e8e-e2c1-499c-8279-172ac6021112",
+      "name": "Check IG Carousel Status"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "54f025a7-540a-47f6-9e2b-d8fc0e722d8f",
+              "leftValue": "={{$json.status_code}}",
+              "rightValue": "FINISHED",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4400,
+        400
+      ],
+      "id": "7e2bacc6-6ba1-475c-8587-06f5f3f5e0de",
+      "name": "Is IG Carousel Ready?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v26.0/YOUR_INSTAGRAM_BUSINESS_ID/media_publish",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": " access_token",
+              "value": "YOUR_META_ACCESS_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "creation_id",
+              "value": "={{ $(\"Create IG Carousel\").first().json.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        4608,
+        288
+      ],
+      "id": "02a4ffe3-920e-4828-ba98-eba1d5cd8a37",
+      "name": "Publish IG Carousel"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/v24.0/YOUR_FACEBOOK_PAGE_ID/photos",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "YOUR_META_ACCESS_TOKEN"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "=https://YOUR_N8N_DOMAIN/webhook/social-image/fb-post-{{ $execution.id }}.jpg"
+            },
+            {
+              "name": "message",
+              "value": "={{ $(\"Parse Social Content\").first().json.final_caption }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        4800,
+        288
+      ],
+      "id": "6c6a5f70-bd13-4243-b2b8-72a28fe239df",
+      "name": "Publish FB Post"
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        4608,
+        464
+      ],
+      "id": "a10eb26c-83f6-4bbe-9e25-8ea1ffd4ec13",
+      "name": "Wait Before IG Recheck",
+      "webhookId": "REGENERATED_ON_IMPORT"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 19
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        592,
+        128
+      ],
+      "id": "1db0d0e9-c3dc-4ff0-ae70-da36139c167f",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "https://graph.facebook.com/v26.0/me/accounts",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "YOUR_META_ACCESS_TOKEN"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2992,
+        800
+      ],
+      "id": "011c1a6c-a4cd-4258-a8d3-893dd0be0007",
+      "name": "Get FB Page Token"
+    },
+    {
+      "parameters": {
+        "url": "https://graph.facebook.com/v24.0/me/accounts",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "access_token",
+              "value": "YOUR_META_ACCESS_TOKEN"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3440,
+        800
+      ],
+      "id": "432795f6-ebda-4c5e-aac7-7165e3debc25",
+      "name": "Get Facebook Page"
+    },
+    {
+      "parameters": {
+        "postAs": "organization",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.linkedIn",
+      "typeVersion": 1,
+      "position": [
+        2656,
+        736
+      ],
+      "id": "e9ed23f3-914e-4e5f-b0ed-7bf09420b03a",
+      "name": "Create a post"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Get Ecosphere Products": {
+      "main": [
+        [
+          {
+            "node": "Extract Product Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Product Links": {
+      "main": [
+        [
+          {
+            "node": "Select Today's Product",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select Today's Product": {
+      "main": [
+        [
+          {
+            "node": "Get Today's Product Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Today's Product Page": {
+      "main": [
+        [
+          {
+            "node": "Extract Product Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Product Data": {
+      "main": [
+        [
+          {
+            "node": "Ollama Generate Social Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Generate Social Content": {
+      "main": [
+        [
+          {
+            "node": "Parse Social Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Social Content": {
+      "main": [
+        [
+          {
+            "node": "Download Product Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Product Image": {
+      "main": [
+        [
+          {
+            "node": "Prepare Final AI Image Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Final AI Image Prompt": {
+      "main": [
+        [
+          {
+            "node": "Prepare Product Reference",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Product Reference": {
+      "main": [
+        [
+          {
+            "node": "Generate Final AI Product Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Final AI Product Post": {
+      "main": [
+        [
+          {
+            "node": "Convert AI Image to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert AI Image to File": {
+      "main": [
+        [
+          {
+            "node": "Prepare IG Carousel + FB HTML1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare IG Carousel + FB HTML1": {
+      "main": [
+        [
+          {
+            "node": "Render IG Slide 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render IG Slide 1": {
+      "main": [
+        [
+          {
+            "node": "Save IG Slide 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait After Slide 1": {
+      "main": [
+        [
+          {
+            "node": "Render IG Slide 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render IG Slide 2": {
+      "main": [
+        [
+          {
+            "node": "Save IG Slide 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait After Slide 2": {
+      "main": [
+        [
+          {
+            "node": "Render IG Slide 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render IG Slide 3": {
+      "main": [
+        [
+          {
+            "node": "Save IG Slide 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait After Slide 3": {
+      "main": [
+        [
+          {
+            "node": "Render IG Slide 4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render IG Slide 4": {
+      "main": [
+        [
+          {
+            "node": "Save IG Slide 4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait After Slide 4": {
+      "main": [
+        [
+          {
+            "node": "Render FB Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save IG Slide 1": {
+      "main": [
+        [
+          {
+            "node": "Wait After Slide 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render FB Post": {
+      "main": [
+        [
+          {
+            "node": "Save FB Post1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save IG Slide 2": {
+      "main": [
+        [
+          {
+            "node": "Wait After Slide 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save IG Slide 3": {
+      "main": [
+        [
+          {
+            "node": "Wait After Slide 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save IG Slide 4": {
+      "main": [
+        [
+          {
+            "node": "Wait After Slide 4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build Image Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Image Path": {
+      "main": [
+        [
+          {
+            "node": "Read Social Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Social Image": {
+      "main": [
+        [
+          {
+            "node": "Return Social Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save FB Post1": {
+      "main": [
+        [
+          {
+            "node": "Create IG Child 1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create IG Child 1": {
+      "main": [
+        [
+          {
+            "node": "Create IG Child 2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create IG Child 2": {
+      "main": [
+        [
+          {
+            "node": "Create IG Child 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create IG Child 3": {
+      "main": [
+        [
+          {
+            "node": "Create IG Child 4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create IG Child 4": {
+      "main": [
+        [
+          {
+            "node": "Create IG Carousel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create IG Carousel": {
+      "main": [
+        [
+          {
+            "node": "Wait for IG Carousel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for IG Carousel": {
+      "main": [
+        [
+          {
+            "node": "Check IG Carousel Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check IG Carousel Status": {
+      "main": [
+        [
+          {
+            "node": "Is IG Carousel Ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is IG Carousel Ready?": {
+      "main": [
+        [
+          {
+            "node": "Publish IG Carousel",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Before IG Recheck",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish IG Carousel": {
+      "main": [
+        [
+          {
+            "node": "Publish FB Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before IG Recheck": {
+      "main": [
+        [
+          {
+            "node": "Check IG Carousel Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Ecosphere Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish FB Post": {
+      "main": [
+        []
+      ]
+    },
+    "Get FB Page Token": {
+      "main": [
+        [
+          {
+            "node": "Get Facebook Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a post": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "timezone": "Asia/Kolkata",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "REMOVED_FOR_PUBLIC_REPOSITORY"
+  },
+  "tags": []
+}
